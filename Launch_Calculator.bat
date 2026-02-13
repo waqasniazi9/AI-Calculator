@@ -1,24 +1,8 @@
 @echo off
-title AI Calculator Launcher
-echo ========================================
-echo    AI Calculator by Waqas Khan Niazi
-echo ========================================
-echo.
-echo Starting calculator...
-echo.
+REM Launch Updated Calculator
+REM This batch file runs the AI-Enhanced Calculator
 
-cd /d "%~dp0"
-python updated_calculator
+cd /d "d:\python learning course at corvit"
+.venv\Scripts\python.exe updated_calculator
 
-if errorlevel 1 (
-    echo.
-    echo ERROR: Failed to launch calculator!
-    echo.
-    echo Possible issues:
-    echo - Python is not installed
-    echo - Required packages are missing
-    echo.
-    echo To fix, run: pip install numpy SpeechRecognition sounddevice soundfile
-    echo.
-    pause
-)
+pause
