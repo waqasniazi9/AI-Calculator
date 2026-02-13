@@ -1,0 +1,2139 @@
+import tkinter as tk
+from tkinter import scrolledtext, messagebox, ttk
+import math
+import re
+import json
+import os
+import threading
+import time
+import numpy as np
+from datetime import datetime
+import random
+from collections import deque
+
+# --- VOICE RECOGNITION IMPORTS (using sounddevice) ---
+VOICE_FEATURES_AVAILABLE = False
+try:
+    import speech_recognition as sr
+    import sounddevice as sd
+    import soundfile as sf
+    VOICE_FEATURES_AVAILABLE = True
+    print("Voice features: SoundDevice backend enabled")
+except ImportError as e:
+    print(f"Voice features disabled: {e}")
+    print("Install with: pip install SpeechRecognition sounddevice soundfile")
+
+
+class AIEnhancedCalculator:
+    def __init__(self, root):
+        self.root = root
+        self.root.title(
+            "AI-Powered Smart Calculator with Voice by Waqas Khan Niazi FIA Lahore")
+        self.root.geometry("950x800")
+        self.root.configure(bg='#2c3e50')
+
+        # Initialize variables
+        self.current_input = ""
+        self.result = ""
+        self.memory = 0
+        self.history = deque(maxlen=50)
+        self.is_dark_mode = True
+        self.is_listening = False
+        self.voice_feedback = True
+        self.voice_status_text = "Voice: Ready"
+        self.current_mode = "calculator"  # calculator or converter
+
+        # Advanced Voice Pro Settings
+        self.voice_max_duration = 15  # Maximum recording time in seconds
+        self.voice_silence_threshold = 2.5  # Seconds of silence to auto-stop
+        self.voice_min_duration = 1.0  # Minimum recording time
+        self.voice_calibration_time = 0.8  # Noise calibration duration
+        self.audio_meter = None  # Canvas for audio level visualization
+        self.recording_start_time = 0
+        self.last_voice_detected_time = 0
+
+        # Voice recognition setup
+        if VOICE_FEATURES_AVAILABLE:
+            try:
+                self.recognizer = sr.Recognizer()
+                self.sample_rate = 16000
+                self.duration = 5
+                devices = sd.query_devices()
+                print(f"Available audio devices: {len(devices)}")
+                self.voice_features_available = True
+            except Exception as e:
+                print(f"Voice initialization error: {e}")
+                self.voice_features_available = False
+        else:
+            self.voice_features_available = False
+            self.recognizer = None
+
+        # Create GUI
+        self.setup_gui()
+        self.bind_keyboard_events()
+
+    def setup_gui(self):
+        # Title
+        title_label = tk.Label(
+            self.root,
+            text="🎤 AI-Powered Voice Calculator by Waqas Khan Niazi FIA Lahore",
+            font=("Arial", 16, "bold"),
+            bg='#34495e',
+            fg='#ecf0f1'
+        )
+        title_label.pack(pady=(10, 5), fill=tk.X)
+
+        # Mode Selection Frame
+        mode_frame = tk.Frame(self.root, bg='#2c3e50')
+        mode_frame.pack(fill=tk.X, padx=20, pady=(0, 10))
+
+        tk.Button(mode_frame, text="🧮 Calculator", command=self.switch_to_calculator,
+                  bg='#3498db', fg='white', font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+        tk.Button(mode_frame, text="🔄 Converters", command=self.switch_to_converter,
+                  bg='#e74c3c', fg='white', font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+        tk.Button(mode_frame, text="🎂 Age Calc", command=self.show_age_calculator,
+                  bg='#1abc9c', fg='white', font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+        tk.Button(mode_frame, text="💪 BMI Calc", command=self.show_bmi_calculator,
+                  bg='#e67e22', fg='white', font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+        tk.Button(mode_frame, text="💰 Finance", command=self.show_finance_tools,
+                  bg='#27ae60', fg='white', font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+        tk.Button(mode_frame, text="⚙ Settings", command=self.show_settings,
+                  bg='#f39c12', fg='white', font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+
+        # Voice control frame
+        voice_frame = tk.Frame(self.root, bg='#2c3e50')
+        voice_frame.pack(fill=tk.X, padx=20, pady=(0, 10))
+
+        if self.voice_features_available:
+            self.voice_button = tk.Button(
+                voice_frame,
+                text="🎤 Start Voice Input",
+                font=("Arial", 11, "bold"),
+                bg='#9b59b6',
+                fg='white',
+                command=self.toggle_voice_input,
+                height=2
+            )
+            self.voice_button.pack(side=tk.LEFT, padx=5,
+                                   fill=tk.X, expand=True)
+
+            tk.Button(
+                voice_frame,
+                text="⏺ Quick Record (5s)",
+                font=("Arial", 9),
+                bg='#3498db',
+                fg='white',
+                command=self.quick_record
+            ).pack(side=tk.LEFT, padx=5)
+
+            self.voice_status = tk.Label(
+                voice_frame,
+                text=self.voice_status_text,
+                font=("Arial", 9),
+                bg='#2c3e50',
+                fg='#2ecc71'
+            )
+            self.voice_status.pack(side=tk.LEFT, padx=10)
+
+            # Audio Level Meter (Advanced Pro Feature)
+            meter_frame = tk.Frame(self.root, bg='#2c3e50')
+            meter_frame.pack(fill=tk.X, padx=20, pady=(0, 5))
+
+            tk.Label(meter_frame, text="🎤 Audio Level:", bg='#2c3e50',
+                     fg='#ecf0f1', font=("Arial", 8)).pack(side=tk.LEFT, padx=5)
+
+            self.audio_meter = tk.Canvas(
+                meter_frame,
+                height=20,
+                bg='#34495e',
+                highlightthickness=0
+            )
+            self.audio_meter.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+            self.audio_meter.pack_forget()  # Hide initially
+        else:
+            tk.Label(
+                voice_frame,
+                text="Voice features unavailable. Install: pip install SpeechRecognition sounddevice soundfile",
+                font=("Arial", 9),
+                bg='#e74c3c',
+                fg='white',
+                wraplength=400
+            ).pack(fill=tk.X, pady=5)
+
+        # Main Content Frame
+        self.main_frame = tk.Frame(self.root, bg='#2c3e50')
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+        # Create calculator and converter frames
+        self.create_calculator_frame()
+        self.create_converter_frame()
+
+        # Show calculator by default
+        self.show_calculator_frame()
+
+    def create_calculator_frame(self):
+        self.calculator_frame = tk.Frame(self.main_frame, bg='#2c3e50')
+
+        # Display frame
+        display_frame = tk.Frame(self.calculator_frame, bg='#34495e')
+        display_frame.pack(fill=tk.X, padx=0, pady=(0, 10))
+
+        self.input_display = tk.Entry(
+            display_frame,
+            font=("Arial", 18),
+            bd=5,
+            relief=tk.RIDGE,
+            justify=tk.RIGHT,
+            bg='#ecf0f1',
+            fg='#2c3e50'
+        )
+        self.input_display.pack(fill=tk.X, ipady=8, padx=10, pady=10)
+
+        self.result_display = tk.Label(
+            display_frame,
+            text="0",
+            font=("Arial", 20, "bold"),
+            bg='#34495e',
+            fg='#2ecc71',
+            anchor=tk.E,
+            height=2
+        )
+        self.result_display.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        # Control buttons
+        control_frame = tk.Frame(self.calculator_frame, bg='#2c3e50')
+        control_frame.pack(fill=tk.X, padx=0, pady=(0, 10))
+
+        tk.Button(control_frame, text="Clear All", command=self.clear_all,
+                  bg='#e74c3c', fg='white', font=("Arial", 9)).pack(side=tk.LEFT, padx=2)
+        tk.Button(control_frame, text="History", command=self.show_history,
+                  bg='#3498db', fg='white', font=("Arial", 9)).pack(side=tk.LEFT, padx=2)
+
+        if self.voice_features_available:
+            tk.Button(control_frame, text="Voice Help", command=self.show_voice_help,
+                      bg='#9b59b6', fg='white', font=("Arial", 9)).pack(side=tk.LEFT, padx=2)
+
+        # Button frame
+        button_frame = tk.Frame(self.calculator_frame, bg='#2c3e50')
+        button_frame.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
+
+        if self.voice_features_available:
+            button_rows = [
+                ['C', 'CE', '⌫', '÷', '√', 'x²', '🎤'],
+                ['7', '8', '9', '×', 'sin', 'cos', 'tan'],
+                ['4', '5', '6', '-', 'π', 'e', 'n!'],
+                ['1', '2', '3', '+', '(', ')', '='],
+                ['0', '.', '±', 'M+', 'MR', 'MC', 'MS']
+            ]
+        else:
+            button_rows = [
+                ['C', 'CE', '⌫', '÷', '√', 'x²', 'M+'],
+                ['7', '8', '9', '×', 'sin', 'cos', 'tan'],
+                ['4', '5', '6', '-', 'π', 'e', 'n!'],
+                ['1', '2', '3', '+', '(', ')', '='],
+                ['0', '.', '±', 'MR', 'MC', 'MS', 'M+']
+            ]
+
+        for row_idx, row in enumerate(button_rows):
+            row_frame = tk.Frame(button_frame, bg='#2c3e50')
+            row_frame.pack(fill=tk.BOTH, expand=True)
+
+            for col_idx, text in enumerate(row):
+                if text == '=':
+                    btn_color = '#2ecc71'
+                    text_color = 'white'
+                elif text in ['C', 'CE']:
+                    btn_color = '#e74c3c'
+                    text_color = 'white'
+                elif text in ['sin', 'cos', 'tan', '√', 'π', 'e', 'n!', 'x²', '🎤']:
+                    btn_color = '#9b59b6'
+                    text_color = 'white'
+                elif text in ['M+', 'MR', 'MC', 'MS']:
+                    btn_color = '#f39c12'
+                    text_color = 'white'
+                else:
+                    btn_color = '#34495e'
+                    text_color = '#ecf0f1'
+
+                btn = tk.Button(
+                    row_frame,
+                    text=text,
+                    font=("Arial", 12),
+                    bg=btn_color,
+                    fg=text_color,
+                    bd=2,
+                    relief=tk.RAISED,
+                    command=lambda t=text: self.on_button_click(t)
+                )
+                btn.pack(side=tk.LEFT, fill=tk.BOTH,
+                         expand=True, padx=2, pady=2)
+
+    def create_converter_frame(self):
+        self.converter_frame = tk.Frame(self.main_frame, bg='#2c3e50')
+
+        # Converter selector
+        selector_frame = tk.Frame(self.converter_frame, bg='#34495e')
+        selector_frame.pack(fill=tk.X, padx=0, pady=(0, 10))
+
+        tk.Label(selector_frame, text="Select Converter:", bg='#34495e', fg='#ecf0f1',
+                 font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=10, pady=10)
+
+        self.converter_var = tk.StringVar(value="length")
+        converters = [
+            ("Length", "length"), ("Weight",
+                                   "weight"), ("Temperature", "temperature"),
+            ("Volume", "volume"), ("Area", "area"), ("Speed", "speed"),
+            ("Energy", "energy"), ("Power", "power"), ("Time", "time"),
+            ("Data", "data"), ("Pressure", "pressure"), ("Angle", "angle"),
+            ("Currency", "currency")
+        ]
+
+        for label, value in converters:
+            tk.Radiobutton(
+                selector_frame,
+                text=label,
+                variable=self.converter_var,
+                value=value,
+                command=self.update_converter,
+                bg='#34495e',
+                fg='#ecf0f1',
+                selectcolor='#9b59b6',
+                font=("Arial", 9)
+            ).pack(side=tk.LEFT, padx=5, pady=10)
+
+        # Converter content frame
+        self.converter_content = tk.Frame(self.converter_frame, bg='#2c3e50')
+        self.converter_content.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
+
+        self.update_converter()
+
+    def update_converter(self):
+        # Clear previous content
+        for widget in self.converter_content.winfo_children():
+            widget.destroy()
+
+        converter_type = self.converter_var.get()
+
+        # Create appropriate converter UI
+        if converter_type == "length":
+            self.create_length_converter()
+        elif converter_type == "weight":
+            self.create_weight_converter()
+        elif converter_type == "temperature":
+            self.create_temperature_converter()
+        elif converter_type == "volume":
+            self.create_volume_converter()
+        elif converter_type == "area":
+            self.create_area_converter()
+        elif converter_type == "speed":
+            self.create_speed_converter()
+        elif converter_type == "energy":
+            self.create_energy_converter()
+        elif converter_type == "power":
+            self.create_power_converter()
+        elif converter_type == "time":
+            self.create_time_converter()
+        elif converter_type == "data":
+            self.create_data_converter()
+        elif converter_type == "pressure":
+            self.create_pressure_converter()
+        elif converter_type == "angle":
+            self.create_angle_converter()
+        elif converter_type == "currency":
+            self.create_currency_converter()
+
+    def create_generic_converter(self, conversions_dict):
+        """Generic converter UI for all types"""
+        frame = tk.Frame(self.converter_content, bg='#2c3e50')
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        # Input
+        input_frame = tk.Frame(frame, bg='#34495e')
+        input_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        tk.Label(input_frame, text="From:", bg='#34495e', fg='#ecf0f1',
+                 font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+
+        self.converter_input = tk.Entry(
+            input_frame, font=("Arial", 12), width=15)
+        self.converter_input.pack(side=tk.LEFT, padx=5)
+        self.converter_input.insert(0, "0")
+
+        tk.Label(input_frame, text="To:", bg='#34495e', fg='#ecf0f1',
+                 font=("Arial", 10)).pack(side=tk.LEFT, padx=20)
+
+        self.converter_output = tk.Entry(input_frame, font=(
+            "Arial", 12), width=15, state='readonly')
+        self.converter_output.pack(side=tk.LEFT, padx=5)
+
+        # Unit selection
+        units_frame = tk.Frame(frame, bg='#34495e')
+        units_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        tk.Label(units_frame, text="From Unit:", bg='#34495e',
+                 fg='#ecf0f1', font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+
+        units_list = list(conversions_dict.keys())
+        self.from_unit_var = tk.StringVar(value=units_list[0])
+        from_combo = ttk.Combobox(units_frame, textvariable=self.from_unit_var,
+                                  values=units_list, state='readonly', width=15)
+        from_combo.pack(side=tk.LEFT, padx=5)
+
+        tk.Label(units_frame, text="To Unit:", bg='#34495e',
+                 fg='#ecf0f1', font=("Arial", 10)).pack(side=tk.LEFT, padx=20)
+
+        self.to_unit_var = tk.StringVar(
+            value=units_list[1] if len(units_list) > 1 else units_list[0])
+        to_combo = ttk.Combobox(units_frame, textvariable=self.to_unit_var,
+                                values=units_list, state='readonly', width=15)
+        to_combo.pack(side=tk.LEFT, padx=5)
+
+        # Convert button
+        tk.Button(units_frame, text="Convert", command=lambda: self.perform_conversion(conversions_dict),
+                  bg='#2ecc71', fg='white', font=("Arial", 10)).pack(side=tk.LEFT, padx=10)
+
+        # Bind Enter key
+        self.converter_input.bind(
+            '<Return>', lambda e: self.perform_conversion(conversions_dict))
+
+    def perform_conversion(self, conversions_dict):
+        try:
+            value = float(self.converter_input.get())
+            from_unit = self.from_unit_var.get()
+            to_unit = self.to_unit_var.get()
+
+            # Convert to base unit first
+            to_base = conversions_dict[from_unit]
+            base_value = value * to_base
+
+            # Convert from base to target unit
+            from_base = conversions_dict[to_unit]
+            result = base_value / from_base
+
+            # Display result
+            self.converter_output.config(state='normal')
+            self.converter_output.delete(0, tk.END)
+            self.converter_output.insert(
+                0, f"{result:.6f}".rstrip('0').rstrip('.'))
+            self.converter_output.config(state='readonly')
+        except ValueError:
+            messagebox.showerror("Error", "Please enter a valid number")
+
+    def create_length_converter(self):
+        conversions = {
+            "Millimeter": 1,
+            "Centimeter": 10,
+            "Meter": 1000,
+            "Kilometer": 1000000,
+            "Inch": 25.4,
+            "Foot": 304.8,
+            "Yard": 914.4,
+            "Mile": 1609344
+        }
+        self.create_generic_converter(conversions)
+
+    def create_weight_converter(self):
+        conversions = {
+            "Milligram": 1,
+            "Gram": 1000,
+            "Kilogram": 1000000,
+            "Ounce": 28349.5,
+            "Pound": 453592,
+            "Stone": 6350293,
+            "Ton": 1000000000
+        }
+        self.create_generic_converter(conversions)
+
+    def create_temperature_converter(self):
+        frame = tk.Frame(self.converter_content, bg='#2c3e50')
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        input_frame = tk.Frame(frame, bg='#34495e')
+        input_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        tk.Label(input_frame, text="Temperature:", bg='#34495e',
+                 fg='#ecf0f1', font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+
+        temp_input = tk.Entry(input_frame, font=("Arial", 12), width=15)
+        temp_input.pack(side=tk.LEFT, padx=5)
+        temp_input.insert(0, "0")
+
+        units_frame = tk.Frame(frame, bg='#34495e')
+        units_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        tk.Label(units_frame, text="From:", bg='#34495e', fg='#ecf0f1',
+                 font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+
+        from_unit = tk.StringVar(value="Celsius")
+        from_combo = ttk.Combobox(units_frame, textvariable=from_unit,
+                                  values=["Celsius", "Fahrenheit", "Kelvin"], state='readonly', width=12)
+        from_combo.pack(side=tk.LEFT, padx=5)
+
+        tk.Label(units_frame, text="To:", bg='#34495e', fg='#ecf0f1',
+                 font=("Arial", 10)).pack(side=tk.LEFT, padx=20)
+
+        to_unit = tk.StringVar(value="Fahrenheit")
+        to_combo = ttk.Combobox(units_frame, textvariable=to_unit,
+                                values=["Celsius", "Fahrenheit", "Kelvin"], state='readonly', width=12)
+        to_combo.pack(side=tk.LEFT, padx=5)
+
+        result_label = tk.Label(
+            frame, text="Result: 0", bg='#34495e', fg='#2ecc71', font=("Arial", 14, "bold"))
+        result_label.pack(pady=20)
+
+        def convert_temp():
+            try:
+                value = float(temp_input.get())
+                f = from_unit.get()
+                t = to_unit.get()
+
+                # Convert to Celsius first
+                if f == "Celsius":
+                    c = value
+                elif f == "Fahrenheit":
+                    c = (value - 32) * 5/9
+                else:  # Kelvin
+                    c = value - 273.15
+
+                # Convert to target
+                if t == "Celsius":
+                    result = c
+                elif t == "Fahrenheit":
+                    result = c * 9/5 + 32
+                else:  # Kelvin
+                    result = c + 273.15
+
+                result_label.config(text=f"Result: {result:.2f}°{t[0]}")
+            except ValueError:
+                messagebox.showerror("Error", "Please enter a valid number")
+
+        tk.Button(units_frame, text="Convert", command=convert_temp,
+                  bg='#2ecc71', fg='white', font=("Arial", 10)).pack(side=tk.LEFT, padx=10)
+
+    def create_volume_converter(self):
+        conversions = {
+            "Milliliter": 1,
+            "Liter": 1000,
+            "Cubic Meter": 1000000,
+            "Teaspoon": 4.92892,
+            "Tablespoon": 14.7868,
+            "Fluid Ounce": 29.5735,
+            "Cup": 236.588,
+            "Pint": 473.176,
+            "Gallon": 3785.41
+        }
+        self.create_generic_converter(conversions)
+
+    def create_area_converter(self):
+        conversions = {
+            "Square Millimeter": 1,
+            "Square Centimeter": 100,
+            "Square Meter": 1000000,
+            "Hectare": 10000000000,
+            "Square Inch": 645.16,
+            "Square Foot": 92903,
+            "Square Yard": 836127,
+            "Square Mile": 2589988110976
+        }
+        self.create_generic_converter(conversions)
+
+    def create_speed_converter(self):
+        conversions = {
+            "Meter/Second": 1,
+            "Kilometer/Hour": 0.277778,
+            "Mile/Hour": 0.44704,
+            "Foot/Second": 0.3048,
+            "Knot": 0.514444
+        }
+        self.create_generic_converter(conversions)
+
+    def create_energy_converter(self):
+        conversions = {
+            "Joule": 1,
+            "Kilojoule": 1000,
+            "Calorie": 4.184,
+            "Kilocalorie": 4184,
+            "Watt-Hour": 3600,
+            "Kilowatt-Hour": 3600000,
+            "BTU": 1055.06,
+            "Electronvolt": 1.60218e-19
+        }
+        self.create_generic_converter(conversions)
+
+    def create_power_converter(self):
+        conversions = {
+            "Watt": 1,
+            "Kilowatt": 1000,
+            "Megawatt": 1000000,
+            "Horsepower": 745.7,
+            "BTU/Hour": 0.293071
+        }
+        self.create_generic_converter(conversions)
+
+    def create_time_converter(self):
+        conversions = {
+            "Millisecond": 1,
+            "Second": 1000,
+            "Minute": 60000,
+            "Hour": 3600000,
+            "Day": 86400000,
+            "Week": 604800000,
+            "Month": 2592000000,
+            "Year": 31536000000
+        }
+        self.create_generic_converter(conversions)
+
+    def create_data_converter(self):
+        conversions = {
+            "Byte": 1,
+            "Kilobyte": 1024,
+            "Megabyte": 1048576,
+            "Gigabyte": 1073741824,
+            "Terabyte": 1099511627776,
+            "Petabyte": 1125899906842624
+        }
+        self.create_generic_converter(conversions)
+
+    def create_pressure_converter(self):
+        conversions = {
+            "Pascal": 1,
+            "Kilopascal": 1000,
+            "Bar": 100000,
+            "PSI": 6894.76,
+            "Atmosphere": 101325,
+            "Torr": 133.322
+        }
+        self.create_generic_converter(conversions)
+
+    def create_angle_converter(self):
+        conversions = {
+            "Degree": 1,
+            "Radian": 57.2958,
+            "Gradian": 0.9,
+            "Minute": 60,
+            "Second": 3600
+        }
+        self.create_generic_converter(conversions)
+
+    def create_currency_converter(self):
+        frame = tk.Frame(self.converter_content, bg='#2c3e50')
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        input_frame = tk.Frame(frame, bg='#34495e')
+        input_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        tk.Label(input_frame, text="Note: Currency rates are fixed for demo. Update rates in settings.",
+                 bg='#34495e', fg='#f39c12', font=("Arial", 10)).pack(fill=tk.X, padx=10, pady=10)
+
+        currencies = {
+            "USD": 1,
+            "EUR": 0.92,
+            "GBP": 0.79,
+            "PKR": 278,
+            "INR": 83.12,
+            "AED": 3.67,
+            "SAR": 3.75,
+            "CAD": 1.36,
+            "AUD": 1.52,
+            "JPY": 149.50
+        }
+        self.create_generic_converter(currencies)
+
+    def switch_to_calculator(self):
+        self.current_mode = "calculator"
+        self.show_calculator_frame()
+
+    def switch_to_converter(self):
+        self.current_mode = "converter"
+        self.show_converter_frame()
+
+    def show_calculator_frame(self):
+        self.converter_frame.pack_forget()
+        self.calculator_frame.pack(fill=tk.BOTH, expand=True)
+
+    def show_converter_frame(self):
+        self.calculator_frame.pack_forget()
+        self.converter_frame.pack(fill=tk.BOTH, expand=True)
+
+    def show_settings(self):
+        settings_window = tk.Toplevel(self.root)
+        settings_window.title("⚙ Settings")
+        settings_window.geometry("500x400")
+        settings_window.configure(bg='#2c3e50')
+
+        settings_text = """
+        CALCULATOR & CONVERTER SETTINGS
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        
+        CALCULATOR:
+        • Decimal Precision: 10 digits
+        • History Size: 50 items max
+        • Memory Slots: 1
+        
+        CONVERTERS:
+        • Length: mm, cm, m, km, inch, foot, yard, mile
+        • Weight: mg, g, kg, oz, lb, stone, ton
+        • Temperature: Celsius, Fahrenheit, Kelvin
+        • Volume: ml, l, m³, tsp, tbsp, fl oz, cup, pint, gallon
+        • Area: mm², cm², m², hectare, in², ft², yd², mi²
+        • Speed: m/s, km/h, mph, ft/s, knot
+        • Energy: J, kJ, cal, kcal, Wh, kWh, BTU, eV
+        • Power: W, kW, MW, hp, BTU/hr
+        • Time: ms, sec, min, hr, day, week, month, year
+        • Data: Byte, KB, MB, GB, TB, PB
+        • Pressure: Pa, kPa, bar, PSI, atm, torr
+        • Angle: degree, radian, gradian, minute, second
+        • Currency: USD, EUR, GBP, PKR, INR, AED, SAR, CAD, AUD, JPY
+        
+        VOICE:
+        • Command Recognition via Google API
+        • Support for voice in Calculator mode
+        
+        For more info, click "Voice Help" in main window.
+        """
+
+        text_widget = scrolledtext.ScrolledText(
+            settings_window,
+            wrap=tk.WORD,
+            font=("Consolas", 9),
+            bg='#34495e',
+            fg='#ecf0f1',
+            height=20
+        )
+        text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        text_widget.insert(tk.END, settings_text)
+        text_widget.config(state=tk.DISABLED)
+
+        tk.Button(settings_window, text="Close", command=settings_window.destroy,
+                  bg='#3498db', fg='white').pack(pady=10)
+
+    # --- VOICE FUNCTIONS ---
+
+    def toggle_voice_input(self):
+        if not self.voice_features_available or self.current_mode != "calculator":
+            messagebox.showerror(
+                "Error", "Voice only works in Calculator mode")
+            return
+
+        if not self.is_listening:
+            # Check microphone availability
+            try:
+                devices = sd.query_devices()
+                if not any(d['max_input_channels'] > 0 for d in devices):
+                    messagebox.showerror(
+                        "No Microphone", "No microphone detected. Please connect a microphone.")
+                    return
+            except Exception as e:
+                messagebox.showerror("Error", f"Cannot access microphone: {e}")
+                return
+
+            # Start countdown
+            self.voice_button.config(text="⏳ Get Ready...", bg='#f39c12')
+            self.voice_status.config(
+                text="🎬 Get ready to speak... 2", fg='#f1c40f')
+            self.root.after(1000, lambda: self.voice_status.config(
+                text="🎬 Get ready to speak... 1", fg='#f39c12'))
+            self.root.after(2000, self.start_recording)
+        else:
+            self.is_listening = False
+            self.voice_button.config(text="🎤 Start Voice Input", bg='#9b59b6')
+            self.voice_status.config(text="✅ Recording stopped", fg='#2ecc71')
+            self.root.after(2000, lambda: self.voice_status.config(
+                text="Voice: Ready", fg='#2ecc71'))
+
+    def start_recording(self):
+        self.is_listening = True
+        self.voice_button.config(text="⏹ Stop Recording", bg='#e74c3c')
+        self.voice_status.config(text="🎤 RECORDING - Speak now!", fg='#27ae60')
+
+        voice_thread = threading.Thread(target=self.record_and_process)
+        voice_thread.daemon = True
+        voice_thread.start()
+
+    def quick_record(self):
+        if not self.voice_features_available or self.current_mode != "calculator":
+            return
+
+        if self.is_listening:
+            messagebox.showinfo(
+                "Busy", "Already recording. Please wait or stop current recording.")
+            return
+
+        # Quick start with brief countdown
+        self.voice_status.config(
+            text="🎬 1... Speak in 1 second!", fg='#f39c12')
+        self.root.update()
+        self.root.after(1000, lambda: self.start_quick_recording())
+
+    def start_quick_recording(self):
+        self.voice_status.config(
+            text="🎤 Recording 5 seconds... SPEAK NOW!", fg='#27ae60')
+        self.root.update()
+
+        record_thread = threading.Thread(
+            target=self.record_fixed_duration, args=(5,))
+        record_thread.daemon = True
+        record_thread.start()
+
+    def record_fixed_duration(self, seconds):
+        try:
+            recording = sd.rec(int(seconds * self.sample_rate),
+                               samplerate=self.sample_rate,
+                               channels=1,
+                               dtype='float32')
+
+            for i in range(seconds, 0, -1):
+                if not self.is_listening:
+                    sd.stop()
+                    return
+                self.root.after(0, lambda i=i: self.voice_status.config(
+                    text=f"🎤 Recording... {i}s left", fg='#3498db'))
+                time.sleep(1)
+
+            sd.wait()
+            self.root.after(0, lambda: self.voice_status.config(
+                text="⚙️ Processing your speech...", fg='#f39c12'))
+
+            audio_data = np.squeeze(recording)
+
+            if len(audio_data) == 0:
+                self.root.after(0, lambda: self.voice_status.config(
+                    text="❌ No audio captured", fg='#e74c3c'))
+                return
+
+            self.process_audio_data(audio_data)
+
+        except Exception as e:
+            self.root.after(0, lambda: self.voice_status.config(
+                text=f"❌ Recording error", fg='#e74c3c'))
+            messagebox.showerror(
+                "Recording Error", f"Failed to record audio:\n{str(e)}")
+
+    def record_and_process(self):
+        """Basic recording (for Quick Record)"""
+        try:
+            audio_chunks = []
+
+            def audio_callback(indata, frames, time_info, status):
+                if status:
+                    print(f"Audio status: {status}")
+                audio_chunks.append(indata.copy())
+
+            with sd.InputStream(samplerate=self.sample_rate,
+                                channels=1,
+                                dtype='float32',
+                                blocksize=int(self.sample_rate * 0.5),
+                                callback=audio_callback):
+                while self.is_listening:
+                    time.sleep(0.1)
+
+            if audio_chunks:
+                complete_audio = np.concatenate(audio_chunks, axis=0)
+                self.process_audio_data(complete_audio)
+
+        except Exception as e:
+            self.root.after(0, lambda: self.voice_status.config(
+                text=f"Recording error: {str(e)[:30]}", fg='#e74c3c'))
+            self.is_listening = False
+            self.root.after(0, lambda: self.voice_button.config(
+                text="🎤 Start Voice Input", bg='#9b59b6'))
+            print(f"Recording error: {e}")
+
+    def record_and_process_advanced(self):
+        """Advanced Pro: Recording with real-time voice detection and auto-stop"""
+        try:
+            # Step 1: Calibrate noise level
+            noise_threshold = self.calibrate_noise_level()
+
+            audio_chunks = []
+            voice_chunks_detected = 0
+            total_chunks = 0
+            last_update_time = 0
+
+            def audio_callback(indata, frames, time_info, status):
+                nonlocal voice_chunks_detected, total_chunks
+                if status:
+                    print(f"Audio status: {status}")
+                audio_chunks.append(indata.copy())
+                total_chunks += 1
+
+                # Voice Activity Detection
+                rms = float(np.sqrt(np.mean(indata ** 2)))
+                if rms > noise_threshold:
+                    self.last_voice_detected_time = time.time()
+                    voice_chunks_detected += 1
+
+            with sd.InputStream(samplerate=self.sample_rate,
+                                channels=1,
+                                dtype='float32',
+                                blocksize=int(self.sample_rate * 0.5),
+                                callback=audio_callback):
+
+                while self.is_listening:
+                    current_time = time.time()
+                    elapsed = current_time - self.recording_start_time
+                    silence_duration = current_time - self.last_voice_detected_time
+                    time_remaining = int(self.voice_max_duration - elapsed)
+
+                    # Update UI every 0.1 seconds
+                    if current_time - last_update_time >= 0.1:
+                        last_update_time = current_time
+
+                        # Calculate audio level for meter
+                        if audio_chunks:
+                            recent_chunk = audio_chunks[-1]
+                            rms = float(np.sqrt(np.mean(recent_chunk ** 2)))
+                            level = min(rms * 10, 1.0)  # Scale for display
+                            is_voice = rms > noise_threshold
+                        else:
+                            level = 0
+                            is_voice = False
+
+                        # Update visual meter
+                        self.update_audio_meter(
+                            level, is_voice, time_remaining)
+
+                        # Update status message
+                        if is_voice:
+                            status_msg = f"🟢 VOICE DETECTED! ({time_remaining}s)"
+                            status_color = '#27ae60'
+                        elif silence_duration >= 1.0:
+                            status_msg = f"🔴 Silence: {int(silence_duration)}s ({time_remaining}s)"
+                            status_color = '#f39c12'
+                        else:
+                            status_msg = f"🎤 Listening... ({time_remaining}s)"
+                            status_color = '#3498db'
+
+                        self.root.after(0, lambda m=status_msg, c=status_color:
+                                        self.voice_status.config(text=m, fg=c))
+
+                    # Auto-stop conditions
+                    if elapsed >= self.voice_max_duration:
+                        self.root.after(0, lambda: self.voice_status.config(
+                            text="⏱️ Max time reached (15s)", fg='#f39c12'))
+                        break
+
+                    if elapsed >= self.voice_min_duration and silence_duration >= self.voice_silence_threshold:
+                        self.root.after(0, lambda: self.voice_status.config(
+                            text="✅ Auto-stopped (2.5s silence)", fg='#3498db'))
+                        break
+
+                    time.sleep(0.05)  # Fast updates for smooth meter
+
+            # Recording complete
+            self.is_listening = False
+            self.root.after(0, lambda: self.voice_button.config(
+                text="🎤 Start Voice Input", bg='#9b59b6'))
+
+            if self.audio_meter:
+                self.root.after(0, lambda: self.audio_meter.pack_forget())
+
+            if audio_chunks:
+                duration = time.time() - self.recording_start_time
+                voice_percentage = (
+                    voice_chunks_detected / total_chunks * 100) if total_chunks > 0 else 0
+
+                self.root.after(0, lambda: self.voice_status.config(
+                    text=f"⚙️ Processing {duration:.1f}s ({voice_percentage:.0f}% voice)...",
+                    fg='#f39c12'))
+
+                complete_audio = np.concatenate(audio_chunks, axis=0)
+                self.process_audio_data(complete_audio)
+            else:
+                self.root.after(0, lambda: self.voice_status.config(
+                    text="❌ No audio captured", fg='#e74c3c'))
+
+        except Exception as e:
+            self.root.after(0, lambda: self.voice_status.config(
+                text=f"❌ Recording error", fg='#e74c3c'))
+            self.is_listening = False
+            self.root.after(0, lambda: self.voice_button.config(
+                text="🎤 Start Voice Input", bg='#9b59b6'))
+            if self.audio_meter:
+                self.root.after(0, lambda: self.audio_meter.pack_forget())
+            print(f"Recording error: {e}")
+
+    def calibrate_noise_level(self):
+        """Advanced Pro: Calibrate ambient noise threshold"""
+        try:
+            self.root.after(0, lambda: self.voice_status.config(
+                text="🔧 Calibrating noise... Stay quiet", fg='#f1c40f'))
+
+            recording = sd.rec(int(self.voice_calibration_time * self.sample_rate),
+                               samplerate=self.sample_rate,
+                               channels=1,
+                               dtype='float32')
+            sd.wait()
+
+            audio = np.squeeze(recording)
+            if audio.size == 0:
+                return 0.01
+
+            rms = float(np.sqrt(np.mean(np.square(audio))))
+            threshold = max(rms * 3.5, 0.01)  # 3.5x above ambient noise
+
+            print(
+                f"Noise calibration: RMS={rms:.4f}, Threshold={threshold:.4f}")
+            return threshold
+
+        except Exception as e:
+            print(f"Calibration error: {e}")
+            return 0.01  # Fallback threshold
+
+    def update_audio_meter(self, level, is_voice, time_left):
+        """Advanced Pro: Update visual audio level meter"""
+        if not self.audio_meter:
+            return
+
+        try:
+            width = self.audio_meter.winfo_width()
+            if width <= 1:
+                width = 400  # Default width
+
+            self.audio_meter.delete('all')
+
+            # Background
+            self.audio_meter.create_rectangle(
+                0, 0, width, 20, fill='#34495e', outline='')
+
+            # Level bar
+            bar_width = int(width * min(level, 1.0))
+            color = '#27ae60' if is_voice else '#95a5a6'  # Green if voice, gray if noise
+
+            if bar_width > 0:
+                self.audio_meter.create_rectangle(
+                    0, 0, bar_width, 20, fill=color, outline='')
+
+            # Threshold indicator (red line)
+            threshold_x = int(width * 0.15)
+            self.audio_meter.create_line(
+                threshold_x, 0, threshold_x, 20, fill='#e74c3c', width=2)
+
+            # Time remaining
+            self.audio_meter.create_text(
+                width - 25, 10, text=f"{time_left}s",
+                fill='#ecf0f1', font=('Arial', 9, 'bold'))
+
+            # Voice indicator
+            if is_voice:
+                self.audio_meter.create_text(
+                    50, 10, text="🟢 VOICE",
+                    fill='#ecf0f1', font=('Arial', 8, 'bold'))
+        except:
+            pass  # Ignore meter errors
+
+    def process_audio_data(self, audio_data):
+        try:
+            if audio_data.dtype != np.float32:
+                audio_data = audio_data.astype(np.float32)
+
+            audio_data = np.squeeze(audio_data)
+
+            if len(audio_data) < self.sample_rate * 0.5:
+                self.root.after(0, lambda: self.voice_status.config(
+                    text="❌ Audio too short - speak longer", fg='#e74c3c'))
+                messagebox.showwarning(
+                    "Audio Too Short", "Please speak for at least 1 second.")
+                return
+
+            temp_file = "temp_voice.wav"
+            sf.write(temp_file, audio_data, self.sample_rate)
+
+            self.root.after(0, lambda: self.voice_status.config(
+                text="🔄 Sending to Google Speech API...", fg='#f39c12'))
+
+            with sr.AudioFile(temp_file) as source:
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.2)
+                audio = self.recognizer.record(source)
+
+            text = self.recognizer.recognize_google(audio)
+
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+
+            self.root.after(0, lambda t=text: self.handle_recognized_speech(t))
+
+        except sr.UnknownValueError:
+            self.root.after(0, lambda: self.voice_status.config(
+                text="❌ Could not understand - speak clearly", fg='#e74c3c'))
+            messagebox.showinfo(
+                "Not Recognized", "Could not understand the audio.\n\nTips:\n• Speak clearly\n• Reduce background noise\n• Speak closer to mic")
+        except sr.RequestError as e:
+            self.root.after(0, lambda: self.voice_status.config(
+                text="❌ No internet connection", fg='#e74c3c'))
+            messagebox.showerror(
+                "Connection Error", f"Cannot reach Google Speech API.\n\nCheck your internet connection.\n\nError: {e}")
+            print(f"API Error: {e}")
+        except Exception as e:
+            self.root.after(0, lambda: self.voice_status.config(
+                text="❌ Processing failed", fg='#e74c3c'))
+            messagebox.showerror(
+                "Error", f"Failed to process audio:\n{str(e)}")
+            print(f"Error: {e}")
+        finally:
+            if os.path.exists("temp_voice.wav"):
+                try:
+                    os.remove("temp_voice.wav")
+                except:
+                    pass
+
+    def handle_recognized_speech(self, text):
+        display_text = text[:35] + "..." if len(text) > 35 else text
+        self.voice_status.config(text=f"✅ Heard: {display_text}", fg='#2ecc71')
+
+        converted_text = self.convert_speech_to_math(text.lower())
+
+        if converted_text.strip():
+            self.add_to_input(converted_text)
+            messagebox.showinfo(
+                "✅ Voice Recognized (Advanced Pro)",
+                f'🗣️ You said: "{text}"\n\n'
+                f'➡️ Converted to: {converted_text.strip()}\n\n'
+                f'🎯 Powered by Advanced Pro Voice System'
+            )
+
+        if '=' in converted_text or 'equals' in text.lower():
+            self.root.after(500, self.calculate)
+
+        # Reset status after 3 seconds
+        self.root.after(3000, lambda: self.voice_status.config(
+            text="Voice: Ready 🎙️", fg='#2ecc71'))
+
+    def convert_speech_to_math(self, text):
+        conversions = {
+            r'\bplus\b|\+': '+',
+            r'\bminus\b|\-': '-',
+            r'\btimes\b|\btime\b|\bmultiply\b|\bmultiplied by\b|\bmultiplied\b|\*': '×',
+            r'\bdivided by\b|\bdivide\b|\bover\b|/': '÷',
+            r'\bsquared\b|\^2': '**2',
+            r'\bcubed\b|\^3': '**3',
+            r'\bto the power of\b|\^': '**',
+
+            r'\bzero\b': '0', r'\bone\b': '1', r'\btwo\b': '2', r'\bthree\b': '3',
+            r'\bfour\b': '4', r'\bfive\b': '5', r'\bsix\b': '6', r'\bseven\b': '7',
+            r'\beight\b': '8', r'\bnine\b': '9', r'\bten\b': '10',
+
+            r'\bsquare root of\b|\broot of\b': 'sqrt(',
+            r'\bsine of\b|\bsin of\b': 'sin(',
+            r'\bcosine of\b|\bcos of\b': 'cos(',
+            r'\btangent of\b|\btan of\b': 'tan(',
+            r'\blog of\b|\blogarithm of\b': 'log10(',
+            r'\bfactorial of\b|\bfactorial\b': 'factorial(',
+
+            r'\bpi\b|\bpie\b': str(math.pi),
+            r'\be\b|\beuler\b': str(math.e),
+
+            r'\bequals\b|\bequal\b|\bcalculate\b': '=',
+            r'\bclear\b|\breset\b': 'C',
+            r'\bbackspace\b|\bdelete\b': '⌫',
+            r'\bopen bracket\b|\bopen parenthesis\b': '(',
+            r'\bclose bracket\b|\bclose parenthesis\b': ')',
+            r'\bpoint\b|\bdecimal\b': '.',
+            r'\bpercent\b|\bpercentage\b': '/100',
+        }
+
+        result = text
+        for pattern, replacement in conversions.items():
+            result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+
+        result = re.sub(r'\b(what is|compute|calculate|find|the|of|and|please)\b',
+                        '', result, flags=re.IGNORECASE)
+        result = re.sub(r'\s+', ' ', result).strip()
+
+        # Clean up: Remove leading operators (except minus for negative numbers)
+        result = re.sub(r'^[+×÷\*/]+\s*', '', result)
+
+        # Clean up: Remove multiple consecutive operators
+        result = re.sub(r'([+\-×÷\*/])\s*\1+', r'\1', result)
+
+        # Clean up: Fix issues like "x" being used instead of "×"
+        result = result.replace(' x ', '×')
+
+        return result + ' '
+
+    def show_voice_help(self):
+        help_text = """
+╭────────────────────────────────────────────────────────╮
+│  🎤 ADVANCED PRO VOICE SYSTEM - HELP GUIDE  │
+╰────────────────────────────────────────────────────────╯
+
+🌟 ADVANCED PRO FEATURES:
+
+  ✅ Real-time Audio Visualization
+  ✅ Smart Voice Activity Detection  
+  ✅ Auto-Stop on Silence (2.5s)
+  ✅ Automatic Noise Calibration
+  ✅ 15-Second Max Recording
+  ✅ Visual Feedback Meter
+  ✅ Recording Statistics
+  ✅ 3-2-1 Countdown
+
+──────────────────────────────────────────
+
+🗣️ VOICE COMMANDS:
+        
+BASIC MATH:
+  • "five plus three" → 5+3
+  • "ten minus four" → 10-4
+  • "six times seven" → 6×7
+  • "twenty divided by five" → 20÷5
+        
+FUNCTIONS:
+  • "square root of sixteen" → sqrt(16)
+  • "sine of thirty" → sin(30)
+  • "cosine of forty five" → cos(45)
+        
+CONSTANTS:
+  • "pi" → π
+  • "e" → e
+
+──────────────────────────────────────────
+
+💡 PRO TIPS:
+        
+  🟢 Green Bar = Voice Detected
+  ⚪ Gray Bar = Background Noise
+  🔴 Red Line = Voice Threshold
+  
+  • Speak clearly after countdown
+  • Watch the audio meter
+  • Auto-stops after 2.5s silence
+  • Use "equals" to calculate
+  • 15-second max recording time
+        """
+
+        help_window = tk.Toplevel(self.root)
+        help_window.title("🎤 Advanced Pro Voice System - Help")
+        help_window.geometry("600x500")
+        help_window.configure(bg='#2c3e50')
+
+        # Header
+        header = tk.Label(
+            help_window,
+            text="🎤 ADVANCED PRO VOICE SYSTEM",
+            font=('Arial', 14, 'bold'),
+            bg='#9b59b6',
+            fg='white',
+            pady=10
+        )
+        header.pack(fill=tk.X)
+
+        text_widget = scrolledtext.ScrolledText(
+            help_window,
+            wrap=tk.WORD,
+            font=("Consolas", 10),
+            bg='#34495e',
+            fg='#ecf0f1',
+            height=20
+        )
+        text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        text_widget.insert(tk.END, help_text)
+        text_widget.config(state=tk.DISABLED)
+
+        tk.Button(help_window, text="Close", command=help_window.destroy,
+                  bg='#3498db', fg='white').pack(pady=10)
+
+    # --- CALCULATOR FUNCTIONS ---
+
+    def bind_keyboard_events(self):
+        for i in range(10):
+            self.root.bind(str(i), lambda event,
+                           num=i: self.add_to_input(str(num)))
+
+        self.root.bind('<Return>', lambda e: self.calculate())
+        self.root.bind('<Escape>', lambda e: self.clear_all())
+        self.root.bind('<BackSpace>', lambda e: self.backspace())
+        self.root.bind('+', lambda e: self.add_to_input('+'))
+        self.root.bind('-', lambda e: self.add_to_input('-'))
+        self.root.bind('*', lambda e: self.add_to_input('×'))
+        self.root.bind('/', lambda e: self.add_to_input('÷'))
+        self.root.bind('.', lambda e: self.add_to_input('.'))
+        self.root.bind('(', lambda e: self.add_to_input('('))
+        self.root.bind(')', lambda e: self.add_to_input(')'))
+        if self.voice_features_available:
+            self.root.bind('v', lambda e: self.toggle_voice_input())
+
+    def on_button_click(self, button_text):
+        if button_text == '🎤':
+            self.toggle_voice_input()
+        elif button_text == '=':
+            self.calculate()
+        elif button_text == 'C':
+            self.clear_all()
+        elif button_text == 'CE':
+            self.clear_entry()
+        elif button_text == '⌫':
+            self.backspace()
+        elif button_text == '±':
+            self.negate()
+        elif button_text == '√':
+            self.add_to_input('sqrt(')
+        elif button_text == 'x²':
+            self.add_to_input('**2')
+        elif button_text == 'sin':
+            self.add_to_input('sin(')
+        elif button_text == 'cos':
+            self.add_to_input('cos(')
+        elif button_text == 'tan':
+            self.add_to_input('tan(')
+        elif button_text == 'π':
+            self.add_to_input(str(math.pi))
+        elif button_text == 'e':
+            self.add_to_input(str(math.e))
+        elif button_text == 'n!':
+            self.add_to_input('factorial(')
+        elif button_text == 'M+':
+            self.memory_add()
+        elif button_text == 'MR':
+            self.memory_recall()
+        elif button_text == 'MC':
+            self.memory_clear()
+        elif button_text == 'MS':
+            self.memory_store()
+        else:
+            self.add_to_input(button_text)
+
+    def add_to_input(self, value):
+        self.current_input += value
+        self.input_display.delete(0, tk.END)
+        self.input_display.insert(0, self.current_input)
+
+    def calculate(self):
+        try:
+            # Get and clean the input
+            expression = self.current_input.strip()
+
+            # Remove leading operators (except minus for negative numbers)
+            expression = re.sub(r'^[+×÷\*/]+\s*', '', expression)
+
+            # Remove spaces
+            expression = expression.replace(' ', '')
+
+            # Replace mathematical symbols
+            expression = expression.replace('×', '*').replace('÷', '/')
+
+            # Replace mathematical functions
+            expression = expression.replace('sqrt', 'math.sqrt')
+            expression = expression.replace('sin', 'math.sin')
+            expression = expression.replace('cos', 'math.cos')
+            expression = expression.replace('tan', 'math.tan')
+            expression = expression.replace('ln', 'math.log')
+            expression = expression.replace('log', 'math.log10')
+            expression = expression.replace('factorial', 'math.factorial')
+
+            # Clean up any remaining issues
+            # Remove trailing operators
+            expression = re.sub(r'[+\-*/]+$', '', expression)
+
+            # Check if expression is empty or invalid
+            if not expression or expression in ['', '+', '-', '*', '/', '×', '÷']:
+                self.result_display.config(
+                    text="Enter a valid expression", fg='#e74c3c')
+                return
+
+            # Evaluate the expression
+            result = eval(expression, {"__builtins__": {}}, {
+                          "math": math, "abs": abs})
+
+            if isinstance(result, float):
+                if result.is_integer():
+                    result = int(result)
+                else:
+                    result = round(result, 10)
+
+            self.result = str(result)
+            self.result_display.config(text=self.result, fg='#2ecc71')
+
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            self.history.append(
+                f"{timestamp}: {self.current_input} = {self.result}")
+
+            self.current_input = str(result)
+            self.input_display.delete(0, tk.END)
+            self.input_display.insert(0, self.current_input)
+
+        except SyntaxError as e:
+            error_msg = "Syntax Error - Check expression"
+            self.result_display.config(text=error_msg, fg='#e74c3c')
+            print(f"Syntax error: {e}")
+        except ValueError as e:
+            error_msg = "Invalid Value"
+            self.result_display.config(text=error_msg, fg='#e74c3c')
+            print(f"Value error: {e}")
+        except ZeroDivisionError:
+            error_msg = "Cannot divide by zero"
+            self.result_display.config(text=error_msg, fg='#e74c3c')
+        except Exception as e:
+            error_msg = f"Error: {str(e)[:30]}"
+            self.result_display.config(text=error_msg, fg='#e74c3c')
+            print(f"Calculation error: {e}")
+
+    def clear_all(self):
+        self.current_input = ""
+        self.result = ""
+        self.input_display.delete(0, tk.END)
+        self.result_display.config(text="0", fg='#2ecc71')
+
+    def clear_entry(self):
+        self.current_input = ""
+        self.input_display.delete(0, tk.END)
+
+    def backspace(self):
+        self.current_input = self.current_input[:-1]
+        self.input_display.delete(0, tk.END)
+        self.input_display.insert(0, self.current_input)
+
+    def memory_store(self):
+        try:
+            if self.result:
+                self.memory = float(self.result)
+            elif self.current_input:
+                self.memory = float(self.current_input)
+            messagebox.showinfo(
+                "Memory", f"Value {self.memory} stored in memory")
+        except:
+            messagebox.showerror("Error", "Invalid value for memory")
+
+    def memory_recall(self):
+        self.add_to_input(str(self.memory))
+
+    def memory_add(self):
+        try:
+            self.memory += float(self.result if self.result else 0)
+        except:
+            pass
+
+    def memory_clear(self):
+        self.memory = 0
+        messagebox.showinfo("Memory", "Memory cleared")
+
+    def negate(self):
+        if self.current_input:
+            if self.current_input[0] == '-':
+                self.current_input = self.current_input[1:]
+            else:
+                self.current_input = '-' + self.current_input
+            self.input_display.delete(0, tk.END)
+            self.input_display.insert(0, self.current_input)
+
+    # --- AGE CALCULATOR ---
+    def show_age_calculator(self):
+        age_window = tk.Toplevel(self.root)
+        age_window.title("Age Calculator")
+        age_window.geometry("450x300")
+        age_window.configure(bg='#2c3e50')
+
+        tk.Label(age_window, text="Age Calculator", font=("Arial", 16, "bold"),
+                 bg='#34495e', fg='#ecf0f1').pack(pady=10, fill=tk.X)
+
+        # Birth Date Input
+        frame1 = tk.Frame(age_window, bg='#2c3e50')
+        frame1.pack(fill=tk.X, padx=20, pady=10)
+
+        tk.Label(frame1, text="Birth Date (YYYY-MM-DD):",
+                 bg='#2c3e50', fg='#ecf0f1').pack(side=tk.LEFT, padx=5)
+        birth_entry = tk.Entry(frame1, font=("Arial", 10), width=20)
+        birth_entry.pack(side=tk.LEFT, padx=5)
+        birth_entry.insert(0, "2000-01-01")
+
+        # Result Frame
+        result_frame = tk.Frame(age_window, bg='#34495e')
+        result_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        result_text = scrolledtext.ScrolledText(result_frame, wrap=tk.WORD, font=("Arial", 11),
+                                                bg='#2c3e50', fg='#2ecc71', height=8)
+        result_text.pack(fill=tk.BOTH, expand=True)
+
+        def calculate_age():
+            try:
+                birth_date = datetime.strptime(
+                    birth_entry.get(), "%Y-%m-%d").date()
+                today = datetime.now().date()
+
+                if birth_date > today:
+                    messagebox.showerror(
+                        "Error", "Birth date cannot be in future!")
+                    return
+
+                years = today.year - birth_date.year
+                months = today.month - birth_date.month
+                days = today.day - birth_date.day
+
+                if days < 0:
+                    months -= 1
+                    days += 30
+
+                if months < 0:
+                    years -= 1
+                    months += 12
+
+                total_days = (today - birth_date).days
+                total_weeks = total_days // 7
+                total_hours = total_days * 24
+                total_minutes = total_hours * 60
+                total_seconds = total_minutes * 60
+
+                result_text.config(state=tk.NORMAL)
+                result_text.delete(1.0, tk.END)
+                result_text.insert(tk.END,
+                                   f"📅 AGE DETAILS\n"
+                                   f"{'='*40}\n"
+                                   f"Age: {years} years, {months} months, {days} days\n"
+                                   f"Total Days: {total_days:,}\n"
+                                   f"Total Weeks: {total_weeks:,}\n"
+                                   f"Total Hours: {total_hours:,}\n"
+                                   f"Total Minutes: {total_minutes:,}\n"
+                                   f"Total Seconds: {total_seconds:,}\n"
+                                   f"{'='*40}\n"
+                                   f"Next Birthday: {(birth_date.replace(year=today.year+1) if birth_date.replace(year=today.year) < today else birth_date.replace(year=today.year)).strftime('%B %d')}\n"
+                                   f"Day of Week Born: {birth_date.strftime('%A')}\n"
+                                   )
+                result_text.config(state=tk.DISABLED)
+            except ValueError:
+                messagebox.showerror(
+                    "Error", "Invalid date format! Use YYYY-MM-DD")
+
+        tk.Button(age_window, text="Calculate Age", command=calculate_age,
+                  bg='#1abc9c', fg='white', font=("Arial", 11)).pack(pady=10)
+
+    # --- BMI CALCULATOR ---
+    def show_bmi_calculator(self):
+        bmi_window = tk.Toplevel(self.root)
+        bmi_window.title("BMI Calculator")
+        bmi_window.geometry("450x350")
+        bmi_window.configure(bg='#2c3e50')
+
+        tk.Label(bmi_window, text="BMI Calculator", font=("Arial", 16, "bold"),
+                 bg='#34495e', fg='#ecf0f1').pack(pady=10, fill=tk.X)
+
+        # Unit Selection
+        unit_frame = tk.Frame(bmi_window, bg='#2c3e50')
+        unit_frame.pack(fill=tk.X, padx=20, pady=10)
+
+        unit_var = tk.StringVar(value="metric")
+        tk.Radiobutton(unit_frame, text="Metric (kg, cm)", variable=unit_var, value="metric",
+                       bg='#2c3e50', fg='#ecf0f1', selectcolor='#3498db').pack(side=tk.LEFT, padx=5)
+        tk.Radiobutton(unit_frame, text="Imperial (lbs, in)", variable=unit_var, value="imperial",
+                       bg='#2c3e50', fg='#ecf0f1', selectcolor='#3498db').pack(side=tk.LEFT, padx=5)
+
+        # Input Frame
+        input_frame = tk.Frame(bmi_window, bg='#2c3e50')
+        input_frame.pack(fill=tk.X, padx=20, pady=10)
+
+        tk.Label(input_frame, text="Weight:", bg='#2c3e50',
+                 fg='#ecf0f1').pack(side=tk.LEFT, padx=5)
+        weight_entry = tk.Entry(input_frame, font=("Arial", 10), width=10)
+        weight_entry.pack(side=tk.LEFT, padx=5)
+        weight_label = tk.Label(input_frame, text="kg",
+                                bg='#2c3e50', fg='#ecf0f1', width=5)
+        weight_label.pack(side=tk.LEFT)
+
+        tk.Label(input_frame, text="Height:", bg='#2c3e50',
+                 fg='#ecf0f1').pack(side=tk.LEFT, padx=5)
+        height_entry = tk.Entry(input_frame, font=("Arial", 10), width=10)
+        height_entry.pack(side=tk.LEFT, padx=5)
+        height_label = tk.Label(input_frame, text="cm",
+                                bg='#2c3e50', fg='#ecf0f1', width=5)
+        height_label.pack(side=tk.LEFT)
+
+        # Result Frame
+        result_frame = tk.Frame(bmi_window, bg='#34495e')
+        result_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        result_text = scrolledtext.ScrolledText(result_frame, wrap=tk.WORD, font=("Arial", 11),
+                                                bg='#2c3e50', fg='#2ecc71', height=10)
+        result_text.pack(fill=tk.BOTH, expand=True)
+
+        def update_units(*args):
+            if unit_var.get() == "metric":
+                weight_label.config(text="kg")
+                height_label.config(text="cm")
+            else:
+                weight_label.config(text="lbs")
+                height_label.config(text="in")
+
+        unit_var.trace("w", update_units)
+
+        def calculate_bmi():
+            try:
+                weight = float(weight_entry.get())
+                height = float(height_entry.get())
+
+                if unit_var.get() == "imperial":
+                    weight = weight * 0.453592
+                    height = height * 2.54
+
+                height_m = height / 100
+                bmi = weight / (height_m ** 2)
+
+                if bmi < 18.5:
+                    category = "🔵 UNDERWEIGHT"
+                    advice = "Try to gain weight gradually"
+                elif bmi < 25:
+                    category = "🟢 NORMAL WEIGHT"
+                    advice = "Great! Keep maintaining healthy habits"
+                elif bmi < 30:
+                    category = "🟡 OVERWEIGHT"
+                    advice = "Consider exercising and balanced diet"
+                else:
+                    category = "🔴 OBESE"
+                    advice = "Consult with a healthcare professional"
+
+                result_text.config(state=tk.NORMAL)
+                result_text.delete(1.0, tk.END)
+                result_text.insert(tk.END,
+                                   f"BMI CALCULATION RESULTS\n"
+                                   f"{'='*40}\n"
+                                   f"Your BMI: {bmi:.1f}\n"
+                                   f"Category: {category}\n"
+                                   f"{'='*40}\n"
+                                   f"Health Advice:\n{advice}\n\n"
+                                   f"BMI Classifications:\n"
+                                   f"• Underweight: < 18.5\n"
+                                   f"• Normal: 18.5 - 24.9\n"
+                                   f"• Overweight: 25 - 29.9\n"
+                                   f"• Obese: ≥ 30\n"
+                                   )
+                result_text.config(state=tk.DISABLED)
+            except ValueError:
+                messagebox.showerror("Error", "Please enter valid numbers!")
+
+        tk.Button(bmi_window, text="Calculate BMI", command=calculate_bmi,
+                  bg='#e67e22', fg='white', font=("Arial", 11)).pack(pady=10)
+
+    # --- FINANCE TOOLS (Loan, Interest, Tip, Percentage) ---
+    def show_finance_tools(self):
+        finance_window = tk.Toplevel(self.root)
+        finance_window.title("Finance Calculator")
+        finance_window.geometry("600x500")
+        finance_window.configure(bg='#2c3e50')
+
+        tk.Label(finance_window, text="Finance Calculator Tools", font=("Arial", 16, "bold"),
+                 bg='#34495e', fg='#ecf0f1').pack(pady=10, fill=tk.X)
+
+        # Tab frame
+        tab_frame = tk.Frame(finance_window, bg='#2c3e50')
+        tab_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        buttons_info = [
+            ("📊 Loan EMI", self.show_loan_calculator),
+            ("💹 Compound Interest", self.show_interest_calculator),
+            ("💵 Tip Calculator", self.show_tip_calculator),
+            ("📈 Percentage", self.show_percentage_calculator),
+            ("💱 Currency", self.show_currency_converter)
+        ]
+
+        for btn_text, btn_cmd in buttons_info:
+            tk.Button(tab_frame, text=btn_text, command=btn_cmd,
+                      bg='#27ae60', fg='white', font=("Arial", 9), width=15).pack(side=tk.LEFT, padx=2)
+
+    def show_loan_calculator(self):
+        loan_window = tk.Toplevel(self.root)
+        loan_window.title("Loan EMI Calculator")
+        loan_window.geometry("450x380")
+        loan_window.configure(bg='#2c3e50')
+
+        tk.Label(loan_window, text="EMI Calculator (Equated Monthly Installment)",
+                 font=("Arial", 13, "bold"), bg='#34495e', fg='#ecf0f1').pack(pady=10, fill=tk.X)
+
+        # Input fields
+        input_data = [
+            ("Principal Amount ($):", "100000"),
+            ("Annual Interest Rate (%):", "8.5"),
+            ("Loan Duration (Years):", "5")
+        ]
+
+        entries = {}
+        frame = tk.Frame(loan_window, bg='#2c3e50')
+        frame.pack(padx=20, pady=10, fill=tk.X)
+
+        for label_text, default_val in input_data:
+            f = tk.Frame(frame, bg='#2c3e50')
+            f.pack(fill=tk.X, pady=5)
+            tk.Label(f, text=label_text, bg='#2c3e50',
+                     fg='#ecf0f1', width=25).pack(side=tk.LEFT)
+            entry = tk.Entry(f, font=("Arial", 11), width=15)
+            entry.insert(0, default_val)
+            entry.pack(side=tk.LEFT, padx=5)
+            entries[label_text.split('(')[0].strip()] = entry
+
+        # Result
+        result_frame = tk.Frame(loan_window, bg='#34495e')
+        result_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+        result_text = scrolledtext.ScrolledText(result_frame, wrap=tk.WORD, font=("Arial", 11),
+                                                bg='#2c3e50', fg='#2ecc71', height=10)
+        result_text.pack(fill=tk.BOTH, expand=True)
+
+        def calculate_emi():
+            try:
+                principal = float(entries['Principal Amount'].get())
+                annual_rate = float(entries['Annual Interest Rate'].get())
+                years = float(entries['Loan Duration'].get())
+
+                monthly_rate = annual_rate / 12 / 100
+                months = years * 12
+
+                if monthly_rate == 0:
+                    emi = principal / months
+                else:
+                    emi = principal * \
+                        (monthly_rate * (1 + monthly_rate) ** months) / \
+                        ((1 + monthly_rate) ** months - 1)
+
+                total_amount = emi * months
+                total_interest = total_amount - principal
+
+                result_text.config(state=tk.NORMAL)
+                result_text.delete(1.0, tk.END)
+                result_text.insert(tk.END,
+                                   f"LOAN EMI CALCULATION\n"
+                                   f"{'='*40}\n"
+                                   f"Principal: ${principal:,.2f}\n"
+                                   f"Annual Interest: {annual_rate}%\n"
+                                   f"Duration: {years} years\n"
+                                   f"{'='*40}\n"
+                                   f"Monthly EMI: ${emi:,.2f}\n"
+                                   f"Total Amount: ${total_amount:,.2f}\n"
+                                   f"Total Interest: ${total_interest:,.2f}\n"
+                                   f"{'='*40}\n"
+                                   f"Total Payments: {int(months)}\n"
+                                   )
+                result_text.config(state=tk.DISABLED)
+            except ValueError:
+                messagebox.showerror("Error", "Please enter valid numbers!")
+
+        tk.Button(loan_window, text="Calculate EMI", command=calculate_emi,
+                  bg='#27ae60', fg='white', font=("Arial", 11)).pack(pady=10)
+
+    def show_interest_calculator(self):
+        interest_window = tk.Toplevel(self.root)
+        interest_window.title("Compound Interest Calculator")
+        interest_window.geometry("450x380")
+        interest_window.configure(bg='#2c3e50')
+
+        tk.Label(interest_window, text="Compound Interest Calculator",
+                 font=("Arial", 13, "bold"), bg='#34495e', fg='#ecf0f1').pack(pady=10, fill=tk.X)
+
+        input_data = [
+            ("Principal ($):", "1000"),
+            ("Annual Rate (%):", "5"),
+            ("Time (Years):", "10"),
+            ("Compounds Per Year:", "12")
+        ]
+
+        entries = {}
+        frame = tk.Frame(interest_window, bg='#2c3e50')
+        frame.pack(padx=20, pady=10, fill=tk.X)
+
+        for label_text, default_val in input_data:
+            f = tk.Frame(frame, bg='#2c3e50')
+            f.pack(fill=tk.X, pady=5)
+            tk.Label(f, text=label_text, bg='#2c3e50',
+                     fg='#ecf0f1', width=25).pack(side=tk.LEFT)
+            entry = tk.Entry(f, font=("Arial", 11), width=15)
+            entry.insert(0, default_val)
+            entry.pack(side=tk.LEFT, padx=5)
+            entries[label_text.split('(')[0].strip()] = entry
+
+        result_frame = tk.Frame(interest_window, bg='#34495e')
+        result_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+        result_text = scrolledtext.ScrolledText(result_frame, wrap=tk.WORD, font=("Arial", 11),
+                                                bg='#2c3e50', fg='#2ecc71', height=10)
+        result_text.pack(fill=tk.BOTH, expand=True)
+
+        def calculate_ci():
+            try:
+                principal = float(entries['Principal'].get())
+                rate = float(entries['Annual Rate'].get())
+                time = float(entries['Time'].get())
+                compounds = float(entries['Compounds Per Year'].get())
+
+                amount = principal * \
+                    (1 + rate / 100 / compounds) ** (compounds * time)
+                interest = amount - principal
+
+                result_text.config(state=tk.NORMAL)
+                result_text.delete(1.0, tk.END)
+                result_text.insert(tk.END,
+                                   f"COMPOUND INTEREST RESULT\n"
+                                   f"{'='*40}\n"
+                                   f"Principal: ${principal:,.2f}\n"
+                                   f"Rate: {rate}% p.a.\n"
+                                   f"Time: {time} years\n"
+                                   f"Compounded: {int(compounds)}x/year\n"
+                                   f"{'='*40}\n"
+                                   f"Final Amount: ${amount:,.2f}\n"
+                                   f"Interest Earned: ${interest:,.2f}\n"
+                                   f"Total Return: {((interest/principal)*100):.2f}%\n"
+                                   )
+                result_text.config(state=tk.DISABLED)
+            except ValueError:
+                messagebox.showerror("Error", "Please enter valid numbers!")
+
+        tk.Button(interest_window, text="Calculate", command=calculate_ci,
+                  bg='#27ae60', fg='white', font=("Arial", 11)).pack(pady=10)
+
+    def show_tip_calculator(self):
+        tip_window = tk.Toplevel(self.root)
+        tip_window.title("Tip Calculator")
+        tip_window.geometry("450x320")
+        tip_window.configure(bg='#2c3e50')
+
+        tk.Label(tip_window, text="Tip Calculator", font=("Arial", 13, "bold"),
+                 bg='#34495e', fg='#ecf0f1').pack(pady=10, fill=tk.X)
+
+        frame = tk.Frame(tip_window, bg='#2c3e50')
+        frame.pack(padx=20, pady=10, fill=tk.X)
+
+        tk.Label(frame, text="Bill Amount ($):", bg='#2c3e50',
+                 fg='#ecf0f1').pack(side=tk.LEFT, padx=5)
+        bill_entry = tk.Entry(frame, font=("Arial", 11), width=15)
+        bill_entry.pack(side=tk.LEFT, padx=5)
+        bill_entry.insert(0, "100")
+
+        f2 = tk.Frame(tip_window, bg='#2c3e50')
+        f2.pack(padx=20, pady=10, fill=tk.X)
+
+        tk.Label(f2, text="Tip Percentage (%):", bg='#2c3e50',
+                 fg='#ecf0f1').pack(side=tk.LEFT, padx=5)
+        tip_entry = tk.Entry(f2, font=("Arial", 11), width=15)
+        tip_entry.pack(side=tk.LEFT, padx=5)
+        tip_entry.insert(0, "15")
+
+        result_frame = tk.Frame(tip_window, bg='#34495e')
+        result_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+        result_text = scrolledtext.ScrolledText(result_frame, wrap=tk.WORD, font=("Arial", 11),
+                                                bg='#2c3e50', fg='#2ecc71', height=8)
+        result_text.pack(fill=tk.BOTH, expand=True)
+
+        def calculate_tip():
+            try:
+                bill = float(bill_entry.get())
+                tip_pct = float(tip_entry.get())
+
+                tip_amount = bill * tip_pct / 100
+                total = bill + tip_amount
+
+                result_text.config(state=tk.NORMAL)
+                result_text.delete(1.0, tk.END)
+                result_text.insert(tk.END,
+                                   f"TIP CALCULATION\n"
+                                   f"{'='*40}\n"
+                                   f"Bill Amount: ${bill:,.2f}\n"
+                                   f"Tip ({tip_pct}%): ${tip_amount:,.2f}\n"
+                                   f"{'='*40}\n"
+                                   f"Total Amount: ${total:,.2f}\n"
+                                   f"Per Person (4): ${total/4:,.2f}\n"
+                                   )
+                result_text.config(state=tk.DISABLED)
+            except ValueError:
+                messagebox.showerror("Error", "Please enter valid numbers!")
+
+        tk.Button(tip_window, text="Calculate Tip", command=calculate_tip,
+                  bg='#27ae60', fg='white', font=("Arial", 11)).pack(pady=10)
+
+    def show_percentage_calculator(self):
+        pct_window = tk.Toplevel(self.root)
+        pct_window.title("Percentage Calculator")
+        pct_window.geometry("450x380")
+        pct_window.configure(bg='#2c3e50')
+
+        tk.Label(pct_window, text="Percentage Calculator", font=("Arial", 13, "bold"),
+                 bg='#34495e', fg='#ecf0f1').pack(pady=10, fill=tk.X)
+
+        # Radio buttons for different calculations
+        calc_type = tk.StringVar(value="of")
+
+        frame_radio = tk.Frame(pct_window, bg='#2c3e50')
+        frame_radio.pack(fill=tk.X, padx=20, pady=10)
+
+        tk.Radiobutton(frame_radio, text="X% of Y", variable=calc_type, value="of",
+                       bg='#2c3e50', fg='#ecf0f1', selectcolor='#3498db').pack(side=tk.LEFT, padx=5)
+        tk.Radiobutton(frame_radio, text="X is Y% of what?", variable=calc_type, value="what",
+                       bg='#2c3e50', fg='#ecf0f1', selectcolor='#3498db').pack(side=tk.LEFT, padx=5)
+        tk.Radiobutton(frame_radio, text="% change from X to Y", variable=calc_type, value="change",
+                       bg='#2c3e50', fg='#ecf0f1', selectcolor='#3498db').pack(side=tk.LEFT, padx=5)
+
+        frame_input = tk.Frame(pct_window, bg='#2c3e50')
+        frame_input.pack(padx=20, pady=10, fill=tk.X)
+
+        tk.Label(frame_input, text="Value 1:", bg='#2c3e50',
+                 fg='#ecf0f1', width=10).pack(side=tk.LEFT)
+        val1_entry = tk.Entry(frame_input, font=("Arial", 11), width=15)
+        val1_entry.pack(side=tk.LEFT, padx=5)
+
+        tk.Label(frame_input, text="Value 2:", bg='#2c3e50',
+                 fg='#ecf0f1', width=10).pack(side=tk.LEFT)
+        val2_entry = tk.Entry(frame_input, font=("Arial", 11), width=15)
+        val2_entry.pack(side=tk.LEFT, padx=5)
+
+        result_frame = tk.Frame(pct_window, bg='#34495e')
+        result_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+        result_text = scrolledtext.ScrolledText(result_frame, wrap=tk.WORD, font=("Arial", 11),
+                                                bg='#2c3e50', fg='#2ecc71', height=10)
+        result_text.pack(fill=tk.BOTH, expand=True)
+
+        def calculate_percentage():
+            try:
+                val1 = float(val1_entry.get())
+                val2 = float(val2_entry.get())
+
+                result_text.config(state=tk.NORMAL)
+                result_text.delete(1.0, tk.END)
+
+                if calc_type.get() == "of":
+                    result = val1 * val2 / 100
+                    result_text.insert(tk.END,
+                                       f"PERCENTAGE CALCULATION\n"
+                                       f"{'='*40}\n"
+                                       f"{val1}% of {val2} = {result:,.2f}\n"
+                                       )
+                elif calc_type.get() == "what":
+                    result = val1 * 100 / val2
+                    result_text.insert(tk.END,
+                                       f"PERCENTAGE CALCULATION\n"
+                                       f"{'='*40}\n"
+                                       f"{val1} is {result:,.2f}% of {val2}\n"
+                                       )
+                else:  # change
+                    change = val2 - val1
+                    pct_change = (change / val1) * 100
+                    result_text.insert(tk.END,
+                                       f"PERCENTAGE CHANGE\n"
+                                       f"{'='*40}\n"
+                                       f"From: {val1}\n"
+                                       f"To: {val2}\n"
+                                       f"Change: {change:,.2f}\n"
+                                       f"% Change: {pct_change:,.2f}%\n"
+                                       )
+
+                result_text.config(state=tk.DISABLED)
+            except (ValueError, ZeroDivisionError):
+                messagebox.showerror("Error", "Please enter valid numbers!")
+
+        tk.Button(pct_window, text="Calculate", command=calculate_percentage,
+                  bg='#27ae60', fg='white', font=("Arial", 11)).pack(pady=10)
+
+    def show_currency_converter(self):
+        curr_window = tk.Toplevel(self.root)
+        curr_window.title("Currency Converter - 180+ Currencies")
+        curr_window.geometry("550x400")
+        curr_window.configure(bg='#2c3e50')
+
+        tk.Label(curr_window, text="Global Currency Converter (180+ Currencies)", font=("Arial", 13, "bold"),
+                 bg='#34495e', fg='#ecf0f1').pack(pady=10, fill=tk.X)
+
+        # Comprehensive exchange rates (All currencies relative to USD = 1.0)
+        rates = {
+            "USD": 1.0, "EUR": 0.92, "GBP": 0.79, "JPY": 149.50, "AUD": 1.53,
+            "CAD": 1.36, "CHF": 0.88, "CNY": 7.24, "INR": 83.12, "PKR": 278.50,
+            "AFN": 70.50, "ALL": 93.20, "DZD": 135.80, "AOA": 825.00, "XCD": 2.70,
+            "ARS": 350.00, "AMD": 386.50, "AWG": 1.80, "AZN": 1.70, "BSD": 1.0,
+            "BHD": 0.376, "BDT": 110.00, "BBD": 2.0, "BYN": 3.20, "BZD": 2.0,
+            "XOF": 605.00, "BMD": 1.0, "BTN": 83.12, "BOB": 6.91, "BAM": 1.80,
+            "BWP": 13.50, "BRL": 4.98, "BND": 1.35, "BGN": 1.80, "BIF": 2850.00,
+            "KHR": 4100.00, "XAF": 605.00, "CVE": 101.50, "KYD": 0.83, "CLP": 920.00,
+            "COP": 3950.00, "KMF": 453.50, "CDF": 2750.00, "CRC": 525.00, "HRK": 6.93,
+            "CUP": 24.00, "XCG": 2.50, "CZK": 22.80, "DKK": 6.88, "DJF": 177.70,
+            "DOP": 58.50, "EGP": 30.90, "ERN": 15.00, "ETB": 56.50, "SZL": 18.50,
+            "FKP": 0.79, "FJD": 2.25, "XPF": 110.00, "GMD": 66.50, "GEL": 2.68,
+            "GHS": 15.20, "GIP": 0.79, "GTQ": 7.82, "GNF": 8600.00, "GYD": 209.00,
+            "HTG": 132.50, "HNL": 24.70, "HKD": 7.82, "HUF": 355.00, "ISK": 137.50,
+            "IDR": 15650.00, "IRR": 42000.00, "IQD": 1310.00, "ILS": 3.65, "JMD": 155.00,
+            "JOD": 0.709, "KZT": 452.00, "KES": 129.00, "KPW": 900.00, "KRW": 1320.00,
+            "KWD": 0.307, "KGS": 89.50, "LAK": 20500.00, "LBP": 89500.00, "LSL": 18.50,
+            "LRD": 189.00, "LYD": 4.82, "MGA": 4470.00, "MWK": 1690.00, "MYR": 4.72,
+            "MVR": 15.40, "MRU": 39.80, "MUR": 45.50, "MXN": 17.15, "MDL": 17.75,
+            "MNT": 3450.00, "MAD": 10.10, "MZN": 63.80, "MMK": 2100.00, "NAD": 18.50,
+            "NPR": 133.00, "NZD": 1.65, "NIO": 36.70, "NGN": 1550.00, "MKD": 56.80,
+            "NOK": 10.75, "OMR": 0.385, "PAB": 1.0, "PGK": 3.97, "PYG": 7350.00,
+            "PEN": 3.72, "PHP": 56.30, "PLN": 3.98, "QAR": 3.64, "RON": 4.58,
+            "RUB": 92.50, "RWF": 1290.00, "SHP": 0.79, "WST": 2.73, "STN": 22.60,
+            "SAR": 3.75, "RSD": 108.00, "SCR": 13.65, "SLE": 22.50, "SGD": 1.35,
+            "SBD": 8.45, "SOS": 571.00, "ZAR": 18.50, "SSP": 1300.00, "LKR": 298.00,
+            "SDG": 601.00, "SRD": 35.50, "SEK": 10.50, "SYP": 13000.00, "TWD": 31.50,
+            "TJS": 10.95, "TZS": 2520.00, "THB": 35.80, "TOP": 2.36, "TTD": 6.78,
+            "TND": 3.12, "TRY": 32.50, "TMT": 3.50, "UGX": 3720.00, "UAH": 37.20,
+            "AED": 3.67, "UYU": 39.20, "UZS": 12650.00, "VUV": 119.50, "VES": 36.50,
+            "VED": 36.50, "VND": 24500.00, "YER": 250.50, "ZMW": 26.80, "ZWG": 13.50
+        }
+
+        # Currency names for display
+        currency_names = {
+            "USD": "US Dollar", "EUR": "Euro", "GBP": "British Pound", "JPY": "Japanese Yen",
+            "AUD": "Australian Dollar", "CAD": "Canadian Dollar", "CHF": "Swiss Franc",
+            "CNY": "Chinese Yuan", "INR": "Indian Rupee", "PKR": "Pakistani Rupee",
+            "AFN": "Afghan Afghani", "ALL": "Albanian Lek", "DZD": "Algerian Dinar",
+            "AOA": "Angolan Kwanza", "XCD": "E. Caribbean Dollar", "ARS": "Argentine Peso",
+            "AMD": "Armenian Dram", "AWG": "Aruban Florin", "AZN": "Azerbaijani Manat",
+            "BSD": "Bahamian Dollar", "BHD": "Bahraini Dinar", "BDT": "Bangladeshi Taka",
+            "BBD": "Barbadian Dollar", "BYN": "Belarusian Ruble", "BZD": "Belize Dollar",
+            "XOF": "West African CFA", "BMD": "Bermudian Dollar", "BTN": "Bhutanese Ngultrum",
+            "BOB": "Bolivian Boliviano", "BAM": "Bosnia Mark", "BWP": "Botswana Pula",
+            "BRL": "Brazilian Real", "BND": "Brunei Dollar", "BGN": "Bulgarian Lev",
+            "BIF": "Burundian Franc", "KHR": "Cambodian Riel", "XAF": "Central African CFA",
+            "CVE": "Cape Verdean Escudo", "KYD": "Cayman Islands Dollar", "CLP": "Chilean Peso",
+            "COP": "Colombian Peso", "KMF": "Comorian Franc", "CDF": "Congolese Franc",
+            "CRC": "Costa Rican Colón", "HRK": "Croatian Kuna", "CUP": "Cuban Peso",
+            "XCG": "Caribbean Guilder", "CZK": "Czech Koruna", "DKK": "Danish Krone",
+            "DJF": "Djiboutian Franc", "DOP": "Dominican Peso", "EGP": "Egyptian Pound",
+            "ERN": "Eritrean Nakfa", "ETB": "Ethiopian Birr", "SZL": "Swazi Lilangeni",
+            "FKP": "Falkland Islands Pound", "FJD": "Fijian Dollar", "XPF": "CFP Franc",
+            "GMD": "Gambian Dalasi", "GEL": "Georgian Lari", "GHS": "Ghanaian Cedi",
+            "GIP": "Gibraltar Pound", "GTQ": "Guatemalan Quetzal", "GNF": "Guinean Franc",
+            "GYD": "Guyanese Dollar", "HTG": "Haitian Gourde", "HNL": "Honduran Lempira",
+            "HKD": "Hong Kong Dollar", "HUF": "Hungarian Forint", "ISK": "Icelandic Króna",
+            "IDR": "Indonesian Rupiah", "IRR": "Iranian Rial", "IQD": "Iraqi Dinar",
+            "ILS": "Israeli New Shekel", "JMD": "Jamaican Dollar", "JOD": "Jordanian Dinar",
+            "KZT": "Kazakhstani Tenge", "KES": "Kenyan Shilling", "KPW": "North Korean Won",
+            "KRW": "South Korean Won", "KWD": "Kuwaiti Dinar", "KGS": "Kyrgyz Som",
+            "LAK": "Lao Kip", "LBP": "Lebanese Pound", "LSL": "Lesotho Loti",
+            "LRD": "Liberian Dollar", "LYD": "Libyan Dinar", "MGA": "Malagasy Ariary",
+            "MWK": "Malawian Kwacha", "MYR": "Malaysian Ringgit", "MVR": "Maldivian Rufiyaa",
+            "MRU": "Mauritanian Ouguiya", "MUR": "Mauritian Rupee", "MXN": "Mexican Peso",
+            "MDL": "Moldovan Leu", "MNT": "Mongolian Tögrög", "MAD": "Moroccan Dirham",
+            "MZN": "Mozambican Metical", "MMK": "Burmese Kyat", "NAD": "Namibian Dollar",
+            "NPR": "Nepalese Rupee", "NZD": "New Zealand Dollar", "NIO": "Nicaraguan Córdoba",
+            "NGN": "Nigerian Naira", "MKD": "Macedonian Denar", "NOK": "Norwegian Krone",
+            "OMR": "Omani Rial", "PAB": "Panamanian Balboa", "PGK": "Papua New Guinean Kina",
+            "PYG": "Paraguayan Guaraní", "PEN": "Peruvian Sol", "PHP": "Philippine Peso",
+            "PLN": "Polish Złoty", "QAR": "Qatari Riyal", "RON": "Romanian Leu",
+            "RUB": "Russian Ruble", "RWF": "Rwandan Franc", "SHP": "Saint Helena Pound",
+            "WST": "Samoan Tālā", "STN": "São Tomé Dobra", "SAR": "Saudi Riyal",
+            "RSD": "Serbian Dinar", "SCR": "Seychellois Rupee", "SLE": "Sierra Leonean Leone",
+            "SGD": "Singapore Dollar", "SBD": "Solomon Islands Dollar", "SOS": "Somali Shilling",
+            "ZAR": "South African Rand", "SSP": "South Sudanese Pound", "LKR": "Sri Lankan Rupee",
+            "SDG": "Sudanese Pound", "SRD": "Surinamese Dollar", "SEK": "Swedish Krona",
+            "SYP": "Syrian Pound", "TWD": "New Taiwan Dollar", "TJS": "Tajikistani Somoni",
+            "TZS": "Tanzanian Shilling", "THB": "Thai Baht", "TOP": "Tongan Paʻanga",
+            "TTD": "Trinidad & Tobago Dollar", "TND": "Tunisian Dinar", "TRY": "Turkish Lira",
+            "TMT": "Turkmenistani Manat", "UGX": "Ugandan Shilling", "UAH": "Ukrainian Hryvnia",
+            "AED": "UAE Dirham", "UYU": "Uruguayan Peso", "UZS": "Uzbekistani Sum",
+            "VUV": "Vanuatu Vatu", "VES": "Venezuelan Bolívar", "VED": "Venezuelan Digital Bolívar",
+            "VND": "Vietnamese Đồng", "YER": "Yemeni Rial", "ZMW": "Zambian Kwacha",
+            "ZWG": "Zimbabwe Gold"
+        }
+
+        # Create display list with code and name
+        currency_list = sorted(
+            [f"{code} - {currency_names.get(code, code)}" for code in rates.keys()])
+
+        frame = tk.Frame(curr_window, bg='#2c3e50')
+        frame.pack(padx=20, pady=10, fill=tk.X)
+
+        tk.Label(frame, text="Amount:", bg='#2c3e50',
+                 fg='#ecf0f1').pack(side=tk.LEFT, padx=5)
+        amount_entry = tk.Entry(frame, font=("Arial", 11), width=15)
+        amount_entry.pack(side=tk.LEFT, padx=5)
+        amount_entry.insert(0, "100")
+
+        f2 = tk.Frame(curr_window, bg='#2c3e50')
+        f2.pack(padx=20, pady=5, fill=tk.X)
+
+        tk.Label(f2, text="From:", bg='#2c3e50',
+                 fg='#ecf0f1', font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=5)
+        from_curr = ttk.Combobox(
+            f2, values=currency_list, state='readonly', width=25, font=("Arial", 9))
+        from_curr.set("USD - US Dollar")
+        from_curr.pack(side=tk.LEFT, padx=5)
+
+        f3 = tk.Frame(curr_window, bg='#2c3e50')
+        f3.pack(padx=20, pady=5, fill=tk.X)
+
+        tk.Label(f3, text="To:", bg='#2c3e50',
+                 fg='#ecf0f1', font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=5)
+        to_curr = ttk.Combobox(f3, values=currency_list,
+                               state='readonly', width=25, font=("Arial", 9))
+        to_curr.set("EUR - Euro")
+        to_curr.pack(side=tk.LEFT, padx=5)
+
+        result_frame = tk.Frame(curr_window, bg='#34495e')
+        result_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+        result_text = scrolledtext.ScrolledText(result_frame, wrap=tk.WORD, font=("Arial", 10),
+                                                bg='#2c3e50', fg='#2ecc71', height=8)
+        result_text.pack(fill=tk.BOTH, expand=True)
+
+        def convert_currency():
+            try:
+                amount = float(amount_entry.get())
+                # Extract currency codes from selection (format: "CODE - Name")
+                from_c = from_curr.get().split(" - ")[0]
+                to_c = to_curr.get().split(" - ")[0]
+
+                in_usd = amount / rates[from_c]
+                result = in_usd * rates[to_c]
+
+                result_text.config(state=tk.NORMAL)
+                result_text.delete(1.0, tk.END)
+                result_text.insert(tk.END,
+                                   f"╔{'═'*48}╗\n"
+                                   f"║  CURRENCY CONVERSION RESULT{' '*18}║\n"
+                                   f"╠{'═'*48}╣\n"
+                                   f"║  {amount:,.2f} {from_c} ({currency_names.get(from_c, from_c)})\n"
+                                   f"║  ↓ CONVERTS TO ↓\n"
+                                   f"║  {result:,.2f} {to_c} ({currency_names.get(to_c, to_c)})\n"
+                                   f"╠{'═'*48}╣\n"
+                                   f"║  Exchange Rate:\n"
+                                   f"║  1 {from_c} = {rates[to_c]/rates[from_c]:.6f} {to_c}\n"
+                                   f"║  1 {to_c} = {rates[from_c]/rates[to_c]:.6f} {from_c}\n"
+                                   f"╠{'═'*48}╣\n"
+                                   f"║  Total Currencies: 180+{' '*24}║\n"
+                                   f"║  Rates: Approximate (For Demo){' '*13}║\n"
+                                   f"╚{'═'*48}╝\n"
+                                   )
+                result_text.config(state=tk.DISABLED)
+            except ValueError:
+                messagebox.showerror("Error", "Please enter a valid number!")
+            except Exception as e:
+                messagebox.showerror("Error", f"Conversion failed: {str(e)}")
+
+        btn_frame = tk.Frame(curr_window, bg='#2c3e50')
+        btn_frame.pack(pady=5)
+
+        tk.Button(btn_frame, text="🔄 Convert", command=convert_currency,
+                  bg='#27ae60', fg='white', font=("Arial", 11, "bold"), width=12).pack(side=tk.LEFT, padx=5)
+
+        tk.Button(btn_frame, text="🔁 Swap", command=lambda: [from_curr.set(to_curr.get()), to_curr.set(from_curr.get())],
+                  bg='#3498db', fg='white', font=("Arial", 11, "bold"), width=12).pack(side=tk.LEFT, padx=5)
+
+    def show_history(self):
+        history_window = tk.Toplevel(self.root)
+        history_window.title("Calculation History")
+        history_window.geometry("400x400")
+        history_window.configure(bg='#2c3e50')
+
+        text_widget = scrolledtext.ScrolledText(
+            history_window,
+            wrap=tk.WORD,
+            font=("Consolas", 10),
+            bg='#34495e',
+            fg='#ecf0f1',
+            height=15
+        )
+        text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        if self.history:
+            for item in reversed(self.history):
+                text_widget.insert(tk.END, item + '\n')
+        else:
+            text_widget.insert(tk.END, "No history available")
+
+        text_widget.config(state=tk.DISABLED)
+
+        tk.Button(history_window, text="Close", command=history_window.destroy,
+                  bg='#3498db', fg='white').pack(pady=10)
+
+
+def main():
+    root = tk.Tk()
+    app = AIEnhancedCalculator(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
